@@ -11,24 +11,44 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-# Determine project root directory whether running from api/ or root
-CURRENT_FILE = Path(__file__).resolve()
-ROOT_DIR = CURRENT_FILE.parent.parent if CURRENT_FILE.parent.name == "api" else CURRENT_FILE.parent
-
-STATIC_DIR = ROOT_DIR / "static"
-TEMPLATES_DIR = ROOT_DIR / "templates"
-
-try:
-    STATIC_DIR.mkdir(parents=True, exist_ok=True)
-    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
-except Exception:
-    pass
-
 app = FastAPI(title="MindCheck Bot Web Server")
 
-if STATIC_DIR.exists():
+def get_file_content(relative_path: str) -> Optional[str]:
+    possible_roots = [
+        Path.cwd(),
+        Path(__file__).resolve().parent,
+        Path(__file__).resolve().parent.parent,
+        Path("/var/task"),
+        Path(os.getcwd())
+    ]
+    for root in possible_roots:
+        target = root / relative_path
+        if target.exists() and target.is_file():
+            try:
+                return target.read_text(encoding="utf-8")
+            except Exception:
+                pass
+    return None
+
+def get_file_path(relative_path: str) -> Optional[Path]:
+    possible_roots = [
+        Path.cwd(),
+        Path(__file__).resolve().parent,
+        Path(__file__).resolve().parent.parent,
+        Path("/var/task"),
+        Path(os.getcwd())
+    ]
+    for root in possible_roots:
+        target = root / relative_path
+        if target.exists() and target.is_file():
+            return target
+    return None
+
+# Attempt static mount if static directory exists
+static_dir_target = get_file_path("static") or (Path(__file__).resolve().parent.parent / "static")
+if static_dir_target and static_dir_target.exists():
     try:
-        app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+        app.mount("/static", StaticFiles(directory=str(static_dir_target)), name="static")
     except Exception:
         pass
 
@@ -147,34 +167,28 @@ def symptom_pattern(by_category: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# API ROUTES
+# API & PAGE ROUTES
 # ---------------------------------------------------------------------------
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    candidate_paths = [
-        TEMPLATES_DIR / "index.html",
-        ROOT_DIR / "templates" / "index.html",
-        CURRENT_FILE.parent / "templates" / "index.html",
-        Path("templates/index.html").resolve()
-    ]
-    for path in candidate_paths:
-        if path.exists() and path.is_file():
-            return HTMLResponse(content=path.read_text(encoding="utf-8"))
-    return HTMLResponse(content="<h1>MindCheck Bot</h1><p>Index template not found.</p>", status_code=500)
+    content = get_file_content("templates/index.html") or get_file_content("public/index.html")
+    if content:
+        return HTMLResponse(content=content)
+    
+    # Fallback to index template read from current directory
+    alt_path = Path(__file__).resolve().parent.parent / "templates" / "index.html"
+    if alt_path.exists():
+        return HTMLResponse(content=alt_path.read_text(encoding="utf-8"))
+        
+    return HTMLResponse(content="<h1>MindCheck Bot</h1><p>Index template loading...</p>", status_code=200)
 
 @app.get("/static/{file_path:path}")
 async def serve_static_fallback(file_path: str):
-    candidate_paths = [
-        STATIC_DIR / file_path,
-        ROOT_DIR / "static" / file_path,
-        CURRENT_FILE.parent / "static" / file_path,
-        Path(f"static/{file_path}").resolve()
-    ]
-    for path in candidate_paths:
-        if path.exists() and path.is_file():
-            media_type = "text/css" if file_path.endswith(".css") else ("application/javascript" if file_path.endswith(".js") else ("image/png" if file_path.endswith(".png") else None))
-            return FileResponse(path, media_type=media_type)
+    target = get_file_path(f"static/{file_path}") or get_file_path(f"public/static/{file_path}")
+    if target:
+        media_type = "text/css" if file_path.endswith(".css") else ("application/javascript" if file_path.endswith(".js") else ("image/png" if file_path.endswith(".png") else None))
+        return FileResponse(target, media_type=media_type)
     return JSONResponse({"detail": "Static file not found"}, status_code=404)
 
 @app.get("/api/config")
