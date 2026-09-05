@@ -16,11 +16,14 @@ import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Ensure directories exist so StaticFiles never raises missing directory errors on Vercel
+# Ensure directories exist locally (with safe try-except for read-only Vercel serverless environment)
 static_dir = BASE_DIR / "static"
 templates_dir = BASE_DIR / "templates"
-static_dir.mkdir(parents=True, exist_ok=True)
-templates_dir.mkdir(parents=True, exist_ok=True)
+try:
+    static_dir.mkdir(parents=True, exist_ok=True)
+    templates_dir.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 app = FastAPI(title="MindCheck Bot Web Server")
 
