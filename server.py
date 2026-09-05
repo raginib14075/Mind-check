@@ -8,14 +8,13 @@ import webbrowser
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 import uvicorn
 
 BASE_DIR = Path(__file__).resolve().parent
 
-# Ensure directories exist so StaticFiles and Jinja2Templates never raise missing directory errors on Vercel
+# Ensure directories exist so StaticFiles never raises missing directory errors on Vercel
 static_dir = BASE_DIR / "static"
 templates_dir = BASE_DIR / "templates"
 static_dir.mkdir(parents=True, exist_ok=True)
@@ -23,9 +22,12 @@ templates_dir.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="MindCheck Bot Web Server")
 
-# Mount static files and templates with absolute paths for Vercel serverless
-app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
-templates = Jinja2Templates(directory=str(templates_dir))
+if static_dir.exists():
+    try:
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    except Exception:
+        pass
+
 
 
 
@@ -148,7 +150,29 @@ def symptom_pattern(by_category: dict) -> str:
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    candidate_paths = [
+        BASE_DIR / "templates" / "index.html",
+        BASE_DIR.parent / "templates" / "index.html",
+        Path("templates/index.html").resolve()
+    ]
+    for path in candidate_paths:
+        if path.exists() and path.is_file():
+            return HTMLResponse(content=path.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>MindCheck Bot</h1><p>Index template not found.</p>", status_code=500)
+
+@app.get("/static/{file_path:path}")
+async def serve_static_fallback(file_path: str):
+    candidate_paths = [
+        BASE_DIR / "static" / file_path,
+        BASE_DIR.parent / "static" / file_path,
+        Path(f"static/{file_path}").resolve()
+    ]
+    for path in candidate_paths:
+        if path.exists() and path.is_file():
+            media_type = "text/css" if file_path.endswith(".css") else ("application/javascript" if file_path.endswith(".js") else None)
+            return FileResponse(path, media_type=media_type)
+    return JSONResponse({"detail": "Static file not found"}, status_code=404)
+
 
 @app.get("/api/config")
 async def get_config():
