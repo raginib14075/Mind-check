@@ -1,15 +1,63 @@
 /**
- * MindCheck Bot - Minimalist App Controller
+ * MindCheck Bot - Minimalist App Controller (Zero-Latency Instant UI)
  */
 
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
+    // Default Fallback Configuration for 0ms Load Time
+    const DEFAULT_CONFIG = {
+        intro_questions: [
+            "Before we start, how have the last couple of weeks been for you overall?",
+            "Has anything in particular been on your mind or contributing to your stress lately?",
+            "How would you describe your sleep pattern and energy levels recently, in your own words?"
+        ],
+        master_questions: [
+            {"id": 1, "text": "Little interest or pleasure in doing things you'd normally enjoy", "category": "interest"},
+            {"id": 2, "text": "Feeling down, low, or hopeless", "category": "mood"},
+            {"id": 3, "text": "Trouble falling/staying asleep, or sleeping much more than usual", "category": "sleep"},
+            {"id": 4, "text": "Feeling tired or having little energy", "category": "energy"},
+            {"id": 5, "text": "Poor appetite, or eating noticeably more than usual", "category": "appetite"},
+            {"id": 6, "text": "Feeling bad about yourself, or that you're a failure", "category": "selfworth"},
+            {"id": 7, "text": "Trouble concentrating on things like reading or conversations", "category": "cognition"},
+            {"id": 8, "text": "Moving/speaking noticeably slower, or feeling restless/fidgety", "category": "psychomotor"},
+            {"id": 9, "text": "Withdrawing from friends, family, or things you'd usually do socially", "category": "isolation"},
+            {"id": 10, "text": "Feeling nervous, anxious, or on edge", "category": "anxiety"},
+            {"id": 11, "text": "Not being able to stop or control worrying", "category": "anxiety"},
+            {"id": 12, "text": "Worrying too much about different things", "category": "anxiety"},
+            {"id": 13, "text": "Trouble relaxing or feeling restless", "category": "anxiety"},
+            {"id": 14, "text": "Becoming easily annoyed or irritable", "category": "mood"},
+            {"id": 15, "text": "Feeling afraid, as if something awful might happen", "category": "anxiety"},
+            {"id": 16, "text": "Feeling overwhelmed by daily responsibilities or tasks", "category": "stress"},
+            {"id": 17, "text": "Feeling disconnected or detached from your surroundings", "category": "cognition"},
+            {"id": 18, "text": "Difficulty making decisions or thinking clearly", "category": "cognition"},
+            {"id": 19, "text": "Feeling unmotivated or doubting your abilities", "category": "selfworth"},
+            {"id": 20, "text": "Feeling lonely even when around other people", "category": "isolation"}
+        ]
+    };
+
+    const CRISIS_KEYWORDS = [
+        "suicide", "suicidal", "kill myself", "end my life", "end it all", "want to die",
+        "no reason to live", "hurt myself", "hurting myself", "self harm", "self-harm",
+        "not worth living", "better off dead"
+    ];
+
+    const CUE_KEYWORDS = {
+        "sleep":     ["sleep", "insomnia", "can't sleep", "oversleep", "tired"],
+        "appetite":  ["appetite", "eating", "overeat", "not hungry", "weight"],
+        "energy":    ["exhausted", "no energy", "fatigue", "drained"],
+        "interest":  ["no interest", "don't enjoy", "bored", "numb"],
+        "isolation": ["alone", "isolat", "no one understands", "withdraw"],
+        "mood":      ["sad", "down", "hopeless", "empty", "worthless"],
+        "anxiety":   ["anxious", "worry", "panic", "nervous", "fear"],
+        "stress":    ["overwhelmed", "stressed", "burnout", "pressure"]
+    };
+
     // App State
-    let appConfig = null;
+    let appConfig = DEFAULT_CONFIG;
     let userName = "Guest";
     let selectedMode = 1;
     let qCount = 9;
 
-    let chatQuestions = [];
+    let chatQuestions = DEFAULT_CONFIG.intro_questions;
     let chatIndex = 0;
     let chatHistory = [];
     let cueBank = {};
@@ -49,17 +97,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const restartAppBtn = document.getElementById('restartAppBtn');
     const crisisModal = document.getElementById('crisisModal');
 
-    // Fetch Config
-    async function init() {
+    // Async Non-Blocking Config Refresh
+    async function loadServerConfig() {
         try {
             const res = await fetch('/api/config');
-            appConfig = await res.json();
-            chatQuestions = appConfig.intro_questions || [];
+            if (res.ok) {
+                const remoteConfig = await res.json();
+                if (remoteConfig.intro_questions && remoteConfig.master_questions) {
+                    appConfig = remoteConfig;
+                    chatQuestions = appConfig.intro_questions;
+                }
+            }
         } catch (e) {
-            console.error("Failed to load server config", e);
+            console.warn("Using offline configuration fallback", e);
         }
     }
-    await init();
+    loadServerConfig();
 
     function setStage(stageId) {
         [stageSetup, stageChat, stageQuiz, stageReport].forEach(s => s.classList.remove('active'));
@@ -95,7 +148,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatNextBox.classList.add('hidden');
 
         addChatBubble('bot', `Hello ${userName}. Let's start with a gentle conversational check-in.`);
-        setTimeout(() => askNextChatQuestion(), 400);
+        setTimeout(() => askNextChatQuestion(), 200);
     }
 
     function askNextChatQuestion() {
@@ -115,7 +168,24 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatLog.scrollTop = chatLog.scrollHeight;
     }
 
-    async function handleChatSubmit() {
+    function checkCrisisLocal(text) {
+        const lowered = text.toLowerCase();
+        return CRISIS_KEYWORDS.some(kw => lowered.includes(kw));
+    }
+
+    function detectCuesLocal(text) {
+        const lowered = text.toLowerCase();
+        for (const [cue, keywords] of Object.entries(CUE_KEYWORDS)) {
+            for (const kw of keywords) {
+                if (lowered.includes(kw)) {
+                    cueBank[cue] = (cueBank[cue] || 0) + 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    function handleChatSubmit() {
         const text = chatTextInput.value.trim();
         if (!text) return;
 
@@ -123,22 +193,17 @@ document.addEventListener('DOMContentLoaded', async () => {
         chatTextInput.value = '';
         chatHistory.push(text);
 
-        try {
-            const checkRes = await fetch('/api/check-safety', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ text })
-            });
-            const sData = await checkRes.json();
-            if (sData.is_crisis) {
-                crisisModal.classList.remove('hidden');
-            }
-        } catch (e) {
-            console.error("Safety check error", e);
+        // Instant 0ms Local Safety Check
+        if (checkCrisisLocal(text)) {
+            crisisModal.classList.remove('hidden');
         }
 
+        // Instant local cue detection
+        detectCuesLocal(text);
+
+        // Advance to next question instantly
         chatIndex++;
-        setTimeout(() => askNextChatQuestion(), 400);
+        setTimeout(() => askNextChatQuestion(), 200);
     }
 
     chatSendBtn.addEventListener('click', handleChatSubmit);
@@ -149,19 +214,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
-    proceedToQuizBtn.addEventListener('click', async () => {
-        try {
-            const res = await fetch('/api/analyze-intro', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ messages: chatHistory })
-            });
-            const introAnalysis = await res.json();
-            cueBank = introAnalysis.cue_bank || {};
-        } catch (e) {
-            console.error("Intro analysis error", e);
-        }
-
+    proceedToQuizBtn.addEventListener('click', () => {
         setStage('stageQuiz');
         buildQuestionnaireFeed();
     });
@@ -198,7 +251,6 @@ document.addEventListener('DOMContentLoaded', async () => {
                 </div>
             `;
 
-            // Event listeners for rating pills
             const pills = card.querySelectorAll('.q-rating-pill');
             pills.forEach(pill => {
                 pill.addEventListener('click', () => {
@@ -224,59 +276,103 @@ document.addEventListener('DOMContentLoaded', async () => {
         submitAssessmentBtn.disabled = answeredCount < total;
     }
 
-    submitAssessmentBtn.addEventListener('click', async () => {
+    // --- INSTANT 0MS REPORT GENERATOR ---
+    function computeLocalAssessment() {
+        const items = quizQuestions;
+        let totalScore = 0;
+        const categoryScores = {};
+
+        items.forEach(item => {
+            const score = quizAnswers[item.id] || 0;
+            totalScore += score;
+            categoryScores[item.category] = (categoryScores[item.category] || 0) + score;
+        });
+
+        const maxScore = items.length * 3;
+        const pct = maxScore > 0 ? totalScore / maxScore : 0;
+
+        let severity = "Minimal";
+        if (pct > 0.75) severity = "Severe";
+        else if (pct > 0.55) severity = "Moderately severe";
+        else if (pct > 0.35) severity = "Moderate";
+        else if (pct > 0.15) severity = "Mild";
+
+        // Symptom Pattern
+        let pattern = "None detected (scores within normal range)";
+        if (Object.keys(categoryScores).length > 0 && Math.max(...Object.values(categoryScores)) > 0) {
+            const maxVal = Math.max(...Object.values(categoryScores));
+            const topCats = Object.keys(categoryScores).filter(cat => categoryScores[cat] === maxVal);
+            
+            const patternMap = {
+                "sleep":       "Sleep/appetite-dominant pattern",
+                "appetite":    "Sleep/appetite-dominant pattern",
+                "energy":      "Low-energy / fatigue-dominant pattern",
+                "interest":    "Anhedonia-dominant pattern",
+                "mood":        "Mood-dominant pattern",
+                "selfworth":   "Self-worth/cognitive-dominant pattern",
+                "cognition":   "Self-worth/cognitive-dominant pattern",
+                "psychomotor": "Psychomotor-dominant pattern",
+                "isolation":   "Social-withdrawal-dominant pattern",
+                "anxiety":     "Anxiety-dominant pattern",
+                "stress":      "Stress & burnout pattern"
+            };
+
+            const topLabels = [...new Set(topCats.map(c => patternMap[c] || "Mixed pattern"))];
+            pattern = topLabels.join(" & ");
+        }
+
+        const convoNotes = Object.entries(cueBank)
+            .sort((a, b) => b[1] - a[1])
+            .map(([cue, count]) => `Mentioned ${cue}-related themes (${count} time${count > 1 ? 's' : ''})`);
+
+        return {
+            total_score: totalScore,
+            max_score: maxScore,
+            severity,
+            pattern,
+            category_scores: categoryScores,
+            convo_notes: convoNotes
+        };
+    }
+
+    submitAssessmentBtn.addEventListener('click', () => {
         setStage('stageReport');
         reportUserNameTitle.textContent = `Summary for ${userName}`;
 
-        try {
-            const res = await fetch('/api/submit-assessment', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user_name: userName,
-                    answers: quizAnswers,
-                    q_count: qCount,
-                    cue_bank: cueBank
-                })
+        // Instant 0ms Local Report Rendering
+        const data = computeLocalAssessment();
+
+        reportScoreVal.textContent = data.total_score;
+        reportScoreMax.textContent = `/ ${data.max_score}`;
+        reportSeverityTag.textContent = data.severity;
+        reportPatternText.textContent = data.pattern;
+
+        // Category breakdown
+        catList.innerHTML = '';
+        if (data.category_scores) {
+            Object.entries(data.category_scores).forEach(([cat, score]) => {
+                const item = document.createElement('div');
+                item.className = 'cat-item';
+                item.innerHTML = `
+                    <span>${capitalize(cat)}</span>
+                    <strong>${score} pts</strong>
+                `;
+                catList.appendChild(item);
             });
+        }
 
-            const data = await res.json();
-
-            reportScoreVal.textContent = data.total_score;
-            reportScoreMax.textContent = `/ ${data.max_score}`;
-            reportSeverityTag.textContent = data.severity;
-            reportPatternText.textContent = data.pattern;
-
-            // Category breakdown
-            catList.innerHTML = '';
-            if (data.category_scores) {
-                Object.entries(data.category_scores).forEach(([cat, score]) => {
-                    const item = document.createElement('div');
-                    item.className = 'cat-item';
-                    item.innerHTML = `
-                        <span>${capitalize(cat)}</span>
-                        <strong>${score} pts</strong>
-                    `;
-                    catList.appendChild(item);
-                });
-            }
-
-            // Keyword Cues
-            cuesTags.innerHTML = '';
-            if (data.convo_notes && data.convo_notes.length > 0) {
-                convoCuesBox.classList.remove('hidden');
-                data.convo_notes.forEach(note => {
-                    const tag = document.createElement('span');
-                    tag.className = 'cue-pill';
-                    tag.textContent = note;
-                    cuesTags.appendChild(tag);
-                });
-            } else {
-                convoCuesBox.classList.add('hidden');
-            }
-
-        } catch (e) {
-            console.error("Error submitting assessment", e);
+        // Keyword Cues
+        cuesTags.innerHTML = '';
+        if (data.convo_notes && data.convo_notes.length > 0) {
+            convoCuesBox.classList.remove('hidden');
+            data.convo_notes.forEach(note => {
+                const tag = document.createElement('span');
+                tag.className = 'cue-pill';
+                tag.textContent = note;
+                cuesTags.appendChild(tag);
+            });
+        } else {
+            convoCuesBox.classList.add('hidden');
         }
     });
 
