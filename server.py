@@ -5,12 +5,14 @@ MindCheck Bot - Localhost Web Application Backend (FastAPI)
 
 import sys
 import webbrowser
+import threading
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
+
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -252,6 +254,18 @@ async def api_submit_assessment(payload: Dict[str, Any]):
     }
 
 
+def open_browser():
+    import time
+    time.sleep(1.0)
+    webbrowser.open("http://127.0.0.1:8000")
+
 if __name__ == "__main__":
-    print("Starting MindCheck Bot Localhost Web App on http://127.0.0.1:8000 ...")
-    uvicorn.run("server:app", host="127.0.0.1", port=8000, reload=True)
+    print("\n" + "=" * 65)
+    print(" Starting MindCheck Bot Web App at http://127.0.0.1:8000 ")
+    print(" Opening browser automatically...")
+    print(" Press Ctrl+C in this window to stop the server.")
+    print("=" * 65 + "\n")
+    
+    threading.Thread(target=open_browser, daemon=True).start()
+    uvicorn.run(app, host="127.0.0.1", port=8000)
+
